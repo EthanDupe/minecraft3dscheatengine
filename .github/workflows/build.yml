@@ -17,7 +17,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch CTRPluginFramework template and build 3gxtool (no pkg.devkitpro.org)
+      - name: Install Linux build dependencies for 3gxtool
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cmake g++ libyaml-cpp-dev
+
+      - name: Build ThePixellizerOSS 3gxtool natively on Linux
+        run: |
+          git clone --depth 1 https://gitlab.com/thepixellizeross/3gxtool.git /tmp/3gxtool
+          if [ -f /tmp/3gxtool/CMakeLists.txt ]; then
+            cmake -S /tmp/3gxtool -B /tmp/3gxtool/build -DCMAKE_BUILD_TYPE=Release
+            cmake --build /tmp/3gxtool/build -j$(nproc)
+          else
+            make -C /tmp/3gxtool -j$(nproc)
+          fi
+          mkdir -p /tmp/tools/bin
+          BIN_PATH=$(find /tmp/3gxtool -type f -name "3gxtool" -executable | head -n 1)
+          cp "$BIN_PATH" /tmp/tools/bin/3gxtool
+          chmod +x /tmp/tools/bin/3gxtool
+          echo "/tmp/tools/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch CTRPluginFramework template and libctrpf
         run: |
           git clone --depth 1 https://github.com/PabloMK7/CTRPluginFramework-BlankTemplate.git /tmp/ctrpf-template
           cp -r /tmp/ctrpf-template/Includes ./Includes
@@ -26,17 +46,15 @@ jobs:
           [ -f 3gx.ld ] || cp /tmp/ctrpf-template/3gx.ld ./3gx.ld
           [ -f Makefile ] || cp /tmp/ctrpf-template/Makefile ./Makefile
 
-          if ! command -v 3gxtool >/dev/null 2>&1; then
-            git clone --depth 1 https://github.com/Nanquitas/3gxtool.git /tmp/3gxtool
-            make -C /tmp/3gxtool -j$(nproc)
-            mkdir -p /tmp/tools/bin
-            if [ -f /tmp/3gxtool/3gxtool ]; then
-              cp /tmp/3gxtool/3gxtool /tmp/tools/bin/3gxtool
-            elif [ -f /tmp/3gxtool/bin/3gxtool ]; then
-              cp /tmp/3gxtool/bin/3gxtool /tmp/tools/bin/3gxtool
-            fi
-            chmod +x /tmp/tools/bin/3gxtool
-            echo "/tmp/tools/bin" >> "$GITHUB_PATH"
+          if ! find . -name "libctrpf.a" | grep -q .; then
+            git clone --depth 1 https://gitlab.com/thepixellizeross/ctrpluginframework.git /tmp/ctrpf-src
+            make -C /tmp/ctrpf-src/Library -j$(nproc) dist-bin
+            TAR_FILE=$(find /tmp/ctrpf-src -name "*.tar*" | head -n 1)
+            mkdir -p /tmp/ctrpf-dist
+            tar -xf "$TAR_FILE" -C /tmp/ctrpf-dist
+            cp -r /tmp/ctrpf-dist/include/* ./Includes/ || true
+            mkdir -p ./Lib
+            find /tmp/ctrpf-dist -name "libctrpf.a" -exec cp {} ./Lib/ \;
           fi
 
       - name: Build .3gx plugin
