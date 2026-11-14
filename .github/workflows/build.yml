@@ -1,0 +1,42 @@
+name: Build MC3DS Cheat Engine (.3gx)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch CTRPluginFramework template dependencies
+        run: |
+          git clone --depth 1 https://github.com/PabloMK7/CTRPluginFramework-BlankTemplate.git /tmp/ctrpf-template
+          cp -rn /tmp/ctrpf-template/Includes ./Includes || true
+          cp -rn /tmp/ctrpf-template/Assets ./Assets || true
+          [ -f 3gx.ld ] || cp /tmp/ctrpf-template/3gx.ld ./3gx.ld
+          [ -f Makefile ] || cp /tmp/ctrpf-template/Makefile ./Makefile
+
+      - name: Ensure 3gxtool is available
+        run: |
+          if ! command -v 3gxtool >/dev/null 2>&1; then
+            dkp-pacman -Sy --noconfirm 3gxtool || true
+          fi
+
+      - name: Build .3gx plugin
+        run: |
+          make -j$(nproc)
+
+      - name: Upload .3gx artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mc3ds-cheat-engine-3gx
+          path: "*.3gx"
