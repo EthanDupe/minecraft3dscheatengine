@@ -37,7 +37,7 @@ jobs:
           chmod +x /tmp/tools/bin/3gxtool
           echo "/tmp/tools/bin" >> "$GITHUB_PATH"
 
-      - name: Fetch CTRPluginFramework template and libctrpf
+      - name: Fetch CTRPluginFramework template and build libctrpf
         run: |
           git clone --depth 1 https://github.com/PabloMK7/CTRPluginFramework-BlankTemplate.git /tmp/ctrpf-template
           cp -r /tmp/ctrpf-template/Includes ./Includes
@@ -48,13 +48,18 @@ jobs:
 
           if ! find . -name "libctrpf.a" | grep -q .; then
             git clone --depth 1 https://gitlab.com/thepixellizeross/ctrpluginframework.git /tmp/ctrpf-src
+            find /tmp/ctrpf-src -type f -name "*Makefile*" -exec sed -i 's/-Werror//g' {} +
+            sed -i 's/int[[:space:]]*lineCount = 1;/[[maybe_unused]] int lineCount = 1;/' /tmp/ctrpf-src/Library/source/CTRPluginFrameworkImpl/Graphics/Renderer_Sysfont.cpp
+            sed -i 's/int[[:space:]]*advance = 0;/[[maybe_unused]] int advance = 0;/' /tmp/ctrpf-src/Library/source/CTRPluginFrameworkImpl/Graphics/TextBox.cpp
             make -C /tmp/ctrpf-src/Library -j$(nproc) dist-bin
             TAR_FILE=$(find /tmp/ctrpf-src -name "*.tar*" | head -n 1)
             mkdir -p /tmp/ctrpf-dist
             tar -xf "$TAR_FILE" -C /tmp/ctrpf-dist
             cp -r /tmp/ctrpf-dist/include/* ./Includes/ || true
-            mkdir -p ./Lib
-            find /tmp/ctrpf-dist -name "libctrpf.a" -exec cp {} ./Lib/ \;
+            mkdir -p ./Lib "${DEVKITPRO}/libctrpf/include" "${DEVKITPRO}/libctrpf/lib"
+            cp -r ./Includes/* "${DEVKITPRO}/libctrpf/include/" || true
+            find /tmp/ctrpf-dist -name "libctrpf*.a" -exec cp {} ./Lib/ \;
+            find /tmp/ctrpf-dist -name "libctrpf*.a" -exec cp {} "${DEVKITPRO}/libctrpf/lib/" \;
           fi
 
       - name: Build .3gx plugin
