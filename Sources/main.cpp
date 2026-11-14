@@ -49,17 +49,11 @@ namespace Addr {
 // ============================================================================
 // 2. NATIVE SETTINGS MENU HOOK CONFIGURATION (Ghidra Symbols Required)
 // ============================================================================
-// Set to 1 once you fill in the 3 code.bin addresses from your region's
-// code.bin in Ghidra (USA: 000400000017FD00 / EUR: 00040000001B8700).
 #define ENABLE_NATIVE_SETTINGS_HOOK 0
 
 namespace SettingsHookAddr {
-    // Replace 0x00000000 with (Ghidra_Offset + 0x100000) for your code.bin:
-    // 1. OptionsScreen::render(OptionsScreen *this)
     constexpr u32 OPTIONS_SCREEN_RENDER = 0x00000000;
-    // 2. OptionsScreen::handleInput(OptionsScreen *this, ...)
     constexpr u32 OPTIONS_SCREEN_INPUT  = 0x00000000;
-    // 3. Optional: Active screen/menu state pointer or boolean in BSS
     constexpr u32 IS_IN_SETTINGS_MENU   = 0x00000000;
 }
 
@@ -94,7 +88,14 @@ struct CheatConfig {
     int  selectedRow         = 0;
 };
 
+struct BoundToggle {
+    MenuEntry *entry;
+    bool      *flag;
+    bool       prev;
+};
+
 static CheatConfig g_cfg;
+static std::vector<BoundToggle> g_menuToggles;
 
 #if ENABLE_NATIVE_SETTINGS_HOOK
 static Hook        g_renderHook;
@@ -102,20 +103,24 @@ static Hook        g_inputHook;
 #endif
 
 static inline void SafeWriteFloat(u32 addr, float val) {
-    if (Process::CheckAddress(addr)) {
-        Process::WriteFloat(addr, val);
+    if (Process::CheckAddress(addr, MEMPERM_READ)) {
+        if (!Process::WriteFloat(addr, val)) {
+            Process::Patch(addr, &val, sizeof(float));
+        }
     }
 }
 
 static inline void SafeWrite32(u32 addr, u32 val) {
-    if (Process::CheckAddress(addr)) {
-        Process::Write32(addr, val);
+    if (Process::CheckAddress(addr, MEMPERM_READ)) {
+        if (!Process::Write32(addr, val)) {
+            Process::Patch(addr, &val, sizeof(u32));
+        }
     }
 }
 
 static inline float SafeReadFloat(u32 addr, float fallback = 0.0f) {
     float out = fallback;
-    if (Process::CheckAddress(addr)) {
+    if (Process::CheckAddress(addr, MEMPERM_READ)) {
         Process::ReadFloat(addr, out);
     }
     return out;
@@ -123,7 +128,7 @@ static inline float SafeReadFloat(u32 addr, float fallback = 0.0f) {
 
 static inline u32 SafeRead32(u32 addr, u32 fallback = 0) {
     u32 out = fallback;
-    if (Process::CheckAddress(addr)) {
+    if (Process::CheckAddress(addr, MEMPERM_READ)) {
         Process::Read32(addr, out);
     }
     return out;
@@ -131,41 +136,23 @@ static inline u32 SafeRead32(u32 addr, u32 fallback = 0) {
 
 // Apply or restore all active cheats every frame
 static void ApplyCheatsTick() {
-    // 1. No Fall Damage (zeroes the Y-velocity fall damage constant)
     SafeWriteFloat(Addr::FALL_DAMAGE_CONST, g_cfg.godModeNoFall ? 0.0f : -9.01f);
-
-    // 2. Extended Reach (default 5.623)
     SafeWriteFloat(Addr::PLAYER_REACH, g_cfg.extendedReach ? g_cfg.reachValue : 5.623f);
-
-    // 3. Running Speed (default 1.0)
     SafeWriteFloat(Addr::PLAYER_RUN_SPEED, g_cfg.speedBoost ? g_cfg.speedMultiplier : 1.0f);
-
-    // 4. Jump Velocity (default 0.421)
     SafeWriteFloat(Addr::JUMP_VELOCITY, g_cfg.superJump ? g_cfg.jumpValue : 0.421f);
-
-    // 5. World Gravity (default 0.08)
     SafeWriteFloat(Addr::WORLD_GRAVITY, g_cfg.lowGravity ? g_cfg.gravityValue : 0.08f);
-
-    // 6. Creative Mode Fly Speed (default 0.15)
     SafeWriteFloat(Addr::CREATIVE_FLY_SPEED, g_cfg.fastCreativeFly ? g_cfg.flySpeedValue : 0.15f);
-
-    // 7. Swim Speed (default 0.02)
     SafeWriteFloat(Addr::SWIM_SPEED, g_cfg.fastSwim ? g_cfg.swimSpeedValue : 0.02f);
-
-    // 8. Damage Multiplier (default 1.0)
     SafeWriteFloat(Addr::DAMAGE_MULTIPLIER, g_cfg.oneHitDamage ? g_cfg.damageMultiplier : 1.0f);
-
-    // 9. Field of View (default 70.0)
     SafeWriteFloat(Addr::CAMERA_FOV, g_cfg.quakeProFov ? g_cfg.fovValue : 70.0f);
 
-    // 10. Freeze / Clear Hostile Mob Count
     if (g_cfg.freezeHostileMobs) {
         SafeWrite32(Addr::HOSTILE_MOB_COUNT, 0);
     }
 }
 
 // ============================================================================
-// 4. IN-SETTINGS-MENU CHEAT PANEL (Bottom Screen / Native Hook Renderer)
+// 4. IN-SETTINGS-MENU CHEAT PANEL (Bottom Screen / OSD Renderer)
 // ============================================================================
 struct CheatOptionItem {
     const char *label;
@@ -191,9 +178,8 @@ static std::vector<CheatOptionItem> GetCheatItems() {
     };
 }
 
-// Draws the Cheat Engine panel directly onto the 3DS screen when inside Settings
-static void DrawSettingsCheatPanel() {
-    const Screen &scr = OSD::GetBottomScreen();
+// Draws the Cheat Engine panel onto the given bottom screen
+static void DrawSettingsCheatPanel(const Screen &scr) {
     auto items = GetCheatItems();
 
     // Panel background (320x240 bottom screen)
@@ -257,22 +243,26 @@ static void HandleSettingsCheatInput() {
     }
 }
 
+static bool OverlayOSD(const Screen &screen) {
+    if (!g_cfg.settingsOverlayOpen || screen.IsTop) {
+        return false;
+    }
+    DrawSettingsCheatPanel(screen);
+    return true;
+}
+
 #if ENABLE_NATIVE_SETTINGS_HOOK
-// Hooked into OptionsScreen::render
 static void Hook_OptionsScreenRender(void *screenPtr) {
-    // Call original Minecraft 3DS OptionsScreen::render via CTRPF HookContext
     HookContext::GetCurrent().OriginalFunction<void>(screenPtr);
 
-    // Draw our Cheat Engine tab/panel inside the Settings screen
+    const Screen &scr = OSD::GetBottomScreen();
     if (g_cfg.settingsOverlayOpen) {
-        DrawSettingsCheatPanel();
+        DrawSettingsCheatPanel(scr);
     } else {
-        const Screen &scr = OSD::GetBottomScreen();
         scr.Draw("[L+R] Open Cheat Engine", 160, 224, Color(85, 255, 85));
     }
 }
 
-// Hooked into OptionsScreen::handleInput
 static void Hook_OptionsScreenInput(void *screenPtr, void *inputData) {
     if (Controller::IsKeysDown(Key::L | Key::R)) {
         g_cfg.settingsOverlayOpen = !g_cfg.settingsOverlayOpen;
@@ -280,7 +270,7 @@ static void Hook_OptionsScreenInput(void *screenPtr, void *inputData) {
 
     if (g_cfg.settingsOverlayOpen) {
         HandleSettingsCheatInput();
-        return; // Consume input while Cheat Engine panel is open
+        return;
     }
 
     HookContext::GetCurrent().OriginalFunction<void>(screenPtr, inputData);
@@ -296,11 +286,8 @@ static void Entry_ToggleOverlay(MenuEntry *entry) {
     OSD::Notify(g_cfg.settingsOverlayOpen ? "Cheat Engine Panel: OPEN" : "Cheat Engine Panel: CLOSED");
 }
 
-static void Entry_ToggleBool(MenuEntry *entry) {
-    bool *flag = static_cast<bool *>(entry->GetArg());
-    if (flag) {
-        *flag = entry->IsActivated();
-    }
+static void Entry_Noop(MenuEntry *entry) {
+    (void)entry;
 }
 
 static void Entry_SetFloat(MenuEntry *entry) {
@@ -327,20 +314,31 @@ static void Entry_ShowPlayerStats(MenuEntry *entry) {
 
 // Background callback executed every frame
 static void MainLoopCallback() {
+    for (auto &t : g_menuToggles) {
+        bool cur = t.entry->IsActivated();
+        if (cur != t.prev) {
+            *t.flag = cur;
+            t.prev = cur;
+        }
+    }
+
     ApplyCheatsTick();
 
-    // Fallback hotkey (L + R + DPad-Down) to open the in-game Settings Cheat Panel
-    // even before Ghidra native OptionsScreen hooks are enabled.
-    if (Controller::IsKeysPressed(Key::L | Key::R | Key::DPadDown)) {
+    if (Controller::IsKeysDown(Key::L | Key::R) && Controller::IsKeyPressed(Key::DPadDown)) {
         g_cfg.settingsOverlayOpen = !g_cfg.settingsOverlayOpen;
     }
 
 #if !ENABLE_NATIVE_SETTINGS_HOOK
     if (g_cfg.settingsOverlayOpen) {
         HandleSettingsCheatInput();
-        DrawSettingsCheatPanel();
     }
 #endif
+}
+
+static MenuEntry *MakeToggleEntry(const char *name, bool *flag) {
+    auto *entry = new MenuEntry(name, Entry_Noop);
+    g_menuToggles.push_back({entry, flag, false});
+    return entry;
 }
 
 static MenuFolder *BuildCheatMenu() {
@@ -350,63 +348,35 @@ static MenuFolder *BuildCheatMenu() {
     root->Append(new MenuEntry("View Live Coordinates & Mobs", nullptr, Entry_ShowPlayerStats));
 
     auto *movement = new MenuFolder("Movement & Physics");
-    auto *eSpeed   = new MenuEntry("Speed Boost", Entry_ToggleBool);
-    eSpeed->SetArg(&g_cfg.speedBoost);
-    movement->Append(eSpeed);
-
-    auto *eJump    = new MenuEntry("Super Jump", Entry_ToggleBool);
-    eJump->SetArg(&g_cfg.superJump);
-    movement->Append(eJump);
-
-    auto *eGrav    = new MenuEntry("Low Gravity", Entry_ToggleBool);
-    eGrav->SetArg(&g_cfg.lowGravity);
-    movement->Append(eGrav);
-
-    auto *eFly     = new MenuEntry("Fast Creative Fly", Entry_ToggleBool);
-    eFly->SetArg(&g_cfg.fastCreativeFly);
-    movement->Append(eFly);
-
-    auto *eSwim    = new MenuEntry("Fast Swim", Entry_ToggleBool);
-    eSwim->SetArg(&g_cfg.fastSwim);
-    movement->Append(eSwim);
+    movement->Append(MakeToggleEntry("Speed Boost", &g_cfg.speedBoost));
+    movement->Append(MakeToggleEntry("Super Jump", &g_cfg.superJump));
+    movement->Append(MakeToggleEntry("Low Gravity", &g_cfg.lowGravity));
+    movement->Append(MakeToggleEntry("Fast Creative Fly", &g_cfg.fastCreativeFly));
+    movement->Append(MakeToggleEntry("Fast Swim", &g_cfg.fastSwim));
     root->Append(movement);
 
-    auto *combat   = new MenuFolder("Combat & World");
-    auto *eNoFall  = new MenuEntry("No Fall Damage", Entry_ToggleBool);
-    eNoFall->SetArg(&g_cfg.godModeNoFall);
-    combat->Append(eNoFall);
-
-    auto *eReach   = new MenuEntry("Extended Reach", Entry_ToggleBool);
-    eReach->SetArg(&g_cfg.extendedReach);
-    combat->Append(eReach);
-
-    auto *eDmg     = new MenuEntry("High Damage Multiplier", Entry_ToggleBool);
-    eDmg->SetArg(&g_cfg.oneHitDamage);
-    combat->Append(eDmg);
-
-    auto *eFov     = new MenuEntry("Custom Camera FOV", Entry_ToggleBool);
-    eFov->SetArg(&g_cfg.quakeProFov);
-    combat->Append(eFov);
-
-    auto *eMobs    = new MenuEntry("Clear Hostile Mobs", Entry_ToggleBool);
-    eMobs->SetArg(&g_cfg.freezeHostileMobs);
-    combat->Append(eMobs);
+    auto *combat = new MenuFolder("Combat & World");
+    combat->Append(MakeToggleEntry("No Fall Damage", &g_cfg.godModeNoFall));
+    combat->Append(MakeToggleEntry("Extended Reach", &g_cfg.extendedReach));
+    combat->Append(MakeToggleEntry("High Damage Multiplier", &g_cfg.oneHitDamage));
+    combat->Append(MakeToggleEntry("Custom Camera FOV", &g_cfg.quakeProFov));
+    combat->Append(MakeToggleEntry("Clear Hostile Mobs", &g_cfg.freezeHostileMobs));
     root->Append(combat);
 
-    auto *tuning   = new MenuFolder("Value Tuning");
-    auto *tReach   = new MenuEntry("Set Reach Distance", nullptr, Entry_SetFloat);
+    auto *tuning = new MenuFolder("Value Tuning");
+    auto *tReach = new MenuEntry("Set Reach Distance", nullptr, Entry_SetFloat);
     tReach->SetArg(&g_cfg.reachValue);
     tuning->Append(tReach);
 
-    auto *tSpeed   = new MenuEntry("Set Speed Multiplier", nullptr, Entry_SetFloat);
+    auto *tSpeed = new MenuEntry("Set Speed Multiplier", nullptr, Entry_SetFloat);
     tSpeed->SetArg(&g_cfg.speedMultiplier);
     tuning->Append(tSpeed);
 
-    auto *tJump    = new MenuEntry("Set Jump Velocity", nullptr, Entry_SetFloat);
+    auto *tJump = new MenuEntry("Set Jump Velocity", nullptr, Entry_SetFloat);
     tJump->SetArg(&g_cfg.jumpValue);
     tuning->Append(tJump);
 
-    auto *tFov     = new MenuEntry("Set Camera FOV", nullptr, Entry_SetFloat);
+    auto *tFov = new MenuEntry("Set Camera FOV", nullptr, Entry_SetFloat);
     tFov->SetArg(&g_cfg.fovValue);
     tuning->Append(tFov);
     root->Append(tuning);
@@ -438,7 +408,10 @@ int main() {
     }
 #endif
 
+    OSD::Run(OverlayOSD);
     menu->Run();
+    OSD::Stop(OverlayOSD);
+
     delete menu;
     return 0;
 }
