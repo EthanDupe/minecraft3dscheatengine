@@ -17,18 +17,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fix devkitPro pacman 403 and install 3gxtool + libctrpf
-        run: |
-          if ! grep -q "XferCommand" /etc/pacman.conf; then
-            sed -i '/\[options\]/a XferCommand = /usr/bin/curl -A "dkp-pacman" -L -f -o %o %u' /etc/pacman.conf
-          fi
-          dkp-pacman -Sy --noconfirm 3gxtool libctrpf || true
-
-      - name: Fetch CTRPluginFramework-BlankTemplate and fallback 3gxtool
+      - name: Fetch CTRPluginFramework template and build 3gxtool (no pkg.devkitpro.org)
         run: |
           git clone --depth 1 https://github.com/PabloMK7/CTRPluginFramework-BlankTemplate.git /tmp/ctrpf-template
-          cp -r /tmp/ctrpf-template/Includes ./Includes || true
-          cp -r /tmp/ctrpf-template/Assets ./Assets || true
+          cp -r /tmp/ctrpf-template/Includes ./Includes
+          [ -d /tmp/ctrpf-template/Assets ] && cp -r /tmp/ctrpf-template/Assets ./Assets || true
+          [ -d /tmp/ctrpf-template/Lib ] && cp -r /tmp/ctrpf-template/Lib ./Lib || true
           [ -f 3gx.ld ] || cp /tmp/ctrpf-template/3gx.ld ./3gx.ld
           [ -f Makefile ] || cp /tmp/ctrpf-template/Makefile ./Makefile
 
@@ -36,8 +30,13 @@ jobs:
             git clone --depth 1 https://github.com/Nanquitas/3gxtool.git /tmp/3gxtool
             make -C /tmp/3gxtool -j$(nproc)
             mkdir -p /tmp/tools/bin
-            cp /tmp/3gxtool/3gxtool /tmp/tools/bin/3gxtool || cp /tmp/3gxtool/bin/3gxtool /tmp/tools/bin/3gxtool
-            echo "/tmp/tools/bin" >> $GITHUB_PATH
+            if [ -f /tmp/3gxtool/3gxtool ]; then
+              cp /tmp/3gxtool/3gxtool /tmp/tools/bin/3gxtool
+            elif [ -f /tmp/3gxtool/bin/3gxtool ]; then
+              cp /tmp/3gxtool/bin/3gxtool /tmp/tools/bin/3gxtool
+            fi
+            chmod +x /tmp/tools/bin/3gxtool
+            echo "/tmp/tools/bin" >> "$GITHUB_PATH"
           fi
 
       - name: Build .3gx plugin
