@@ -4,10 +4,13 @@ Version:
     Minor: 0
     Revision: 0
 Targets:
-    - 0x000400000017FD00 # Minecraft: New Nintendo 3DS Edition (USA)
-    - 0x00040000001B8700 # Minecraft: New Nintendo 3DS Edition (EUR)
+    - 0x0017FD00 # Minecraft: New Nintendo 3DS Edition (USA)
+    - 0x001B8700 # Minecraft: New Nintendo 3DS Edition (EUR)
 Title: MC3DS Cheat Engine
 Summary: In-Settings Cheat Engine for Minecraft New Nintendo 3DS Edition
 Description: |
     CTRPluginFramework (.3gx) cheat engine using verified GamePatches offsets.
     Press L + R + D-Pad Down for the bottom-screen panel or SELECT for the full menu.
+Compatibility: Any
+MemorySize: 5MiB
+UsePrivateMemory: false
