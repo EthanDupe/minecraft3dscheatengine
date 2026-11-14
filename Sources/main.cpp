@@ -95,8 +95,11 @@ struct CheatConfig {
 };
 
 static CheatConfig g_cfg;
-static RT_HOOK     g_renderHook;
-static RT_HOOK     g_inputHook;
+
+#if ENABLE_NATIVE_SETTINGS_HOOK
+static Hook        g_renderHook;
+static Hook        g_inputHook;
+#endif
 
 static inline void SafeWriteFloat(u32 addr, float val) {
     if (Process::CheckAddress(addr)) {
@@ -257,8 +260,8 @@ static void HandleSettingsCheatInput() {
 #if ENABLE_NATIVE_SETTINGS_HOOK
 // Hooked into OptionsScreen::render
 static void Hook_OptionsScreenRender(void *screenPtr) {
-    // Call original Minecraft 3DS OptionsScreen::render
-    ((void (*)(void *))g_renderHook.callCode)(screenPtr);
+    // Call original Minecraft 3DS OptionsScreen::render via CTRPF HookContext
+    HookContext::GetCurrent().OriginalFunction<void>(screenPtr);
 
     // Draw our Cheat Engine tab/panel inside the Settings screen
     if (g_cfg.settingsOverlayOpen) {
@@ -280,7 +283,7 @@ static void Hook_OptionsScreenInput(void *screenPtr, void *inputData) {
         return; // Consume input while Cheat Engine panel is open
     }
 
-    ((void (*)(void *, void *))g_inputHook.callCode)(screenPtr, inputData);
+    HookContext::GetCurrent().OriginalFunction<void>(screenPtr, inputData);
 }
 #endif
 
@@ -288,6 +291,7 @@ static void Hook_OptionsScreenInput(void *screenPtr, void *inputData) {
 // 5. CTRPF MENU ENTRIES (Always Available via SELECT + Settings Quick-Toggle)
 // ============================================================================
 static void Entry_ToggleOverlay(MenuEntry *entry) {
+    (void)entry;
     g_cfg.settingsOverlayOpen = !g_cfg.settingsOverlayOpen;
     OSD::Notify(g_cfg.settingsOverlayOpen ? "Cheat Engine Panel: OPEN" : "Cheat Engine Panel: CLOSED");
 }
@@ -307,6 +311,7 @@ static void Entry_SetFloat(MenuEntry *entry) {
 }
 
 static void Entry_ShowPlayerStats(MenuEntry *entry) {
+    (void)entry;
     float px = SafeReadFloat(Addr::PLAYER_X);
     float py = SafeReadFloat(Addr::PLAYER_Y);
     float pz = SafeReadFloat(Addr::PLAYER_Z);
@@ -422,14 +427,14 @@ int main() {
 
 #if ENABLE_NATIVE_SETTINGS_HOOK
     if (SettingsHookAddr::OPTIONS_SCREEN_RENDER != 0) {
-        rtInitHook(&g_renderHook, SettingsHookAddr::OPTIONS_SCREEN_RENDER,
-                   reinterpret_cast<u32>(Hook_OptionsScreenRender));
-        rtEnableHook(&g_renderHook);
+        g_renderHook.InitializeForMitm(SettingsHookAddr::OPTIONS_SCREEN_RENDER,
+                                       reinterpret_cast<u32>(Hook_OptionsScreenRender));
+        g_renderHook.Enable();
     }
     if (SettingsHookAddr::OPTIONS_SCREEN_INPUT != 0) {
-        rtInitHook(&g_inputHook, SettingsHookAddr::OPTIONS_SCREEN_INPUT,
-                   reinterpret_cast<u32>(Hook_OptionsScreenInput));
-        rtEnableHook(&g_inputHook);
+        g_inputHook.InitializeForMitm(SettingsHookAddr::OPTIONS_SCREEN_INPUT,
+                                      reinterpret_cast<u32>(Hook_OptionsScreenInput));
+        g_inputHook.Enable();
     }
 #endif
 
