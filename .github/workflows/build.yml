@@ -11,61 +11,22 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: devkitpro/devkitarm:latest
+      image: pablomk7/libctrpf:0.8.0
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Linux build dependencies for 3gxtool
+      - name: Fetch CTRPluginFramework template files
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends cmake g++ libyaml-cpp-dev
-
-      - name: Build ThePixellizerOSS 3gxtool natively on Linux
-        run: |
-          git clone --depth 1 https://gitlab.com/thepixellizeross/3gxtool.git /tmp/3gxtool
-          if [ -f /tmp/3gxtool/CMakeLists.txt ]; then
-            cmake -S /tmp/3gxtool -B /tmp/3gxtool/build -DCMAKE_BUILD_TYPE=Release
-            cmake --build /tmp/3gxtool/build -j$(nproc)
-          else
-            make -C /tmp/3gxtool -j$(nproc)
-          fi
-          mkdir -p /tmp/tools/bin
-          BIN_PATH=$(find /tmp/3gxtool -type f -name "3gxtool" -executable | head -n 1)
-          cp "$BIN_PATH" /tmp/tools/bin/3gxtool
-          chmod +x /tmp/tools/bin/3gxtool
-          echo "/tmp/tools/bin" >> "$GITHUB_PATH"
-
-      - name: Fetch CTRPluginFramework template and build libctrpf
-        run: |
-          git clone --depth 1 https://github.com/PabloMK7/CTRPluginFramework-BlankTemplate.git /tmp/ctrpf-template
-          cp -r /tmp/ctrpf-template/Includes ./Includes
-          [ -d /tmp/ctrpf-template/Assets ] && cp -r /tmp/ctrpf-template/Assets ./Assets || true
-          [ -d /tmp/ctrpf-template/Lib ] && cp -r /tmp/ctrpf-template/Lib ./Lib || true
-          [ -f 3gx.ld ] || cp /tmp/ctrpf-template/3gx.ld ./3gx.ld
-          [ -f Makefile ] || cp /tmp/ctrpf-template/Makefile ./Makefile
-
-          if ! find . -name "libctrpf.a" | grep -q .; then
-            git clone --depth 1 https://gitlab.com/thepixellizeross/ctrpluginframework.git /tmp/ctrpf-src
-            find /tmp/ctrpf-src -type f -name "*Makefile*" -exec sed -i 's/-Werror//g' {} +
-            sed -i 's/int[[:space:]]*lineCount = 1;/[[maybe_unused]] int lineCount = 1;/' /tmp/ctrpf-src/Library/source/CTRPluginFrameworkImpl/Graphics/Renderer_Sysfont.cpp
-            sed -i 's/int[[:space:]]*advance = 0;/[[maybe_unused]] int advance = 0;/' /tmp/ctrpf-src/Library/source/CTRPluginFrameworkImpl/Graphics/TextBox.cpp
-            make -C /tmp/ctrpf-src/Library -j$(nproc) dist-bin
-            TAR_FILE=$(find /tmp/ctrpf-src -name "*.tar*" | head -n 1)
-            mkdir -p /tmp/ctrpf-dist
-            tar -xf "$TAR_FILE" -C /tmp/ctrpf-dist
-            cp -r /tmp/ctrpf-dist/include/* ./Includes/ || true
-            mkdir -p ./Lib "${DEVKITPRO}/libctrpf/include" "${DEVKITPRO}/libctrpf/lib"
-            cp -r ./Includes/* "${DEVKITPRO}/libctrpf/include/" || true
-            find /tmp/ctrpf-dist -name "libctrpf*.a" -exec cp {} ./Lib/ \;
-            find /tmp/ctrpf-dist -name "libctrpf*.a" -exec cp {} "${DEVKITPRO}/libctrpf/lib/" \;
-          fi
+          curl -fsSL https://github.com/PabloMK7/CTRPluginFramework-BlankTemplate/archive/refs/heads/master.tar.gz | tar -xz -C /tmp
+          TPL=/tmp/CTRPluginFramework-BlankTemplate-master
+          cp -rn "$TPL/Includes" ./Includes || true
+          [ -f 3gx.ld ] || cp "$TPL/3gx.ld" ./3gx.ld
+          [ -f Makefile ] || cp "$TPL/Makefile" ./Makefile
 
       - name: Build .3gx plugin
-        run: |
-          export PATH="/tmp/tools/bin:$PATH"
-          make -j$(nproc)
+        run: make -j$(nproc)
 
       - name: Upload .3gx artifact
         uses: actions/upload-artifact@v4
